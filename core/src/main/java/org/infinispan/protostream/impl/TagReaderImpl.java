@@ -1,7 +1,13 @@
 package org.infinispan.protostream.impl;
 
+import static org.infinispan.protostream.descriptors.WireType.FIXED_32_SIZE;
+import static org.infinispan.protostream.descriptors.WireType.FIXED_64_SIZE;
+import static org.infinispan.protostream.descriptors.WireType.MAX_VARINT_SIZE;
+
+import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.ObjectInput;
 import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
@@ -18,10 +24,6 @@ import org.infinispan.protostream.ProtobufTagMarshaller;
 import org.infinispan.protostream.ProtobufUtil;
 import org.infinispan.protostream.TagReader;
 import org.infinispan.protostream.descriptors.WireType;
-
-import static org.infinispan.protostream.descriptors.WireType.FIXED_32_SIZE;
-import static org.infinispan.protostream.descriptors.WireType.FIXED_64_SIZE;
-import static org.infinispan.protostream.descriptors.WireType.MAX_VARINT_SIZE;
 
 /**
  * @author anistor@redhat.com
@@ -86,6 +88,10 @@ public final class TagReaderImpl implements TagReader, ProtobufTagMarshaller.Rea
 
    public static TagReaderImpl newInstance(ImmutableSerializationContext serCtx, byte[] buf, int offset, int length) {
       return new TagReaderImpl((SerializationContextImpl) serCtx, new ByteArrayDecoder(buf, offset, length));
+   }
+
+   public static TagReaderImpl newInstance(ImmutableSerializationContext serCtx, ObjectInput input) {
+      return new TagReaderImpl((SerializationContextImpl) serCtx, new ObjectInputDecoder(input));
    }
 
    @Override
@@ -1158,6 +1164,162 @@ public final class TagReaderImpl implements TagReader, ProtobufTagMarshaller.Rea
                }
                length -= end;
             }
+         }
+      }
+   }
+
+   private static class ObjectInputDecoder extends Decoder {
+
+      private final ObjectInput input;
+      private int pos;
+      private int limit = Integer.MAX_VALUE;
+      private int globalLimit = Integer.MAX_VALUE;
+
+      private ObjectInputDecoder(ObjectInput input) {
+         this.input = input;
+      }
+
+      @Override
+      boolean isAtEnd() throws IOException {
+         return pos == limit || input.available() == 0;
+      }
+
+      @Override
+      void skipVarint() throws IOException {
+         for (int i = 0; i < MAX_VARINT_SIZE; i++) {
+            if (readRawByte() >= 0) {
+               return;
+            }
+         }
+         throw log.malformedVarint();
+      }
+
+      @Override
+      void skipRawBytes(int length) throws IOException {
+         pos += length;
+         if (input.skip(length) != length) {
+            throw log.messageTruncated();
+         }
+      }
+
+      @Override
+      String readString() throws IOException {
+         int length = readVarint32();
+         byte[] data = readRawByteArray(length);
+         if (data == EMPTY) {
+            return "";
+         }
+         return new String(data, UTF8);
+      }
+
+      @Override
+      byte readRawByte() throws IOException {
+         checkLimit(1);
+         try {
+            pos++;
+            return input.readByte();
+         } catch (EOFException e) {
+            throw log.messageTruncated(e);
+         }
+      }
+
+      @Override
+      byte[] readRawByteArray(int length) throws IOException {
+         if (length < 0) {
+            throw log.negativeLength();
+         }
+         if (length == 0) {
+            return EMPTY;
+         }
+         checkLimit(length);
+
+         byte[] data = new byte[length];
+         pos += length;
+         try {
+            input.readFully(data);
+         } catch (EOFException e) {
+            throw log.messageTruncated(e);
+         }
+         return data;
+      }
+
+      @Override
+      ByteBuffer readRawByteBuffer(int length) throws IOException {
+         return ByteBuffer.wrap(readRawByteArray(length));
+      }
+
+      @Override
+      long readVarint64() throws IOException {
+         long value = 0;
+         for (int i = 0; i < 64; i += 7) {
+            byte b = readRawByte();
+            value |= (long) (b & 0x7F) << i;
+            if (b >= 0) {
+               return value;
+            }
+         }
+         throw log.malformedVarint();
+      }
+
+      @Override
+      int readFixed32() throws IOException {
+         checkLimit(FIXED_32_SIZE);
+         return (readRawByte() & 0xFF)
+               | ((readRawByte() & 0xFF) << 8)
+               | ((readRawByte() & 0xFF) << 16)
+               | ((readRawByte() & 0xFF) << 24);
+      }
+
+      @Override
+      long readFixed64() throws IOException {
+         checkLimit(FIXED_64_SIZE);
+         return (readRawByte() & 0xFFL)
+               | ((readRawByte() & 0xFFL) << 8)
+               | ((readRawByte() & 0xFFL) << 16)
+               | ((readRawByte() & 0xFFL) << 24)
+               | ((readRawByte() & 0xFFL) << 32)
+               | ((readRawByte() & 0xFFL) << 40)
+               | ((readRawByte() & 0xFFL) << 48)
+               | ((readRawByte() & 0xFFL) << 56);
+      }
+
+      @Override
+      int pushLimit(int newLimit) throws IOException {
+         if (newLimit < 0) {
+            throw log.negativeLength();
+         }
+         newLimit = pos + newLimit;
+         int oldLimit = this.limit;
+         if (newLimit > oldLimit) {
+            // the end of a nested message cannot go beyond the end of the outer message
+            throw log.messageTruncated();
+         }
+         this.limit = newLimit;
+         return oldLimit;
+      }
+
+      @Override
+      void popLimit(int oldLimit) {
+         limit = oldLimit;
+      }
+
+      @Override
+      int setGlobalLimit(int globalLimit) {
+         if (globalLimit < 0) {
+            throw new IllegalArgumentException("Global limit cannot be negative: " + globalLimit);
+         }
+         int oldGlobalLimit = this.globalLimit;
+         this.globalLimit = globalLimit;
+         return oldGlobalLimit;
+      }
+
+      private void checkLimit(int requestedBytes) throws MalformedProtobufException {
+         int newPos = requestedBytes + pos;
+         if (newPos > limit) {
+            throw log.messageTruncated();
+         }
+         if (newPos > globalLimit) {
+            throw log.globalLimitExceeded();
          }
       }
    }

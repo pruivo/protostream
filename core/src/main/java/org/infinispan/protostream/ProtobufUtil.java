@@ -3,6 +3,8 @@ package org.infinispan.protostream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.ObjectInput;
+import java.io.ObjectOutput;
 import java.io.OutputStream;
 import java.io.Reader;
 import java.nio.ByteBuffer;
@@ -87,12 +89,20 @@ public final class ProtobufUtil {
       return baos.getByteBuffer();
    }
 
+   public static void writeTo(ImmutableSerializationContext ctx, ObjectOutput out, Object t) throws IOException {
+      write(ctx, TagWriterImpl.newInstance(ctx, out), t);
+   }
+
    private static <A> A readFrom(TagReaderImpl in, Class<A> clazz) throws IOException {
       if (clazz.isEnum()) {
          throw new IllegalArgumentException("The Class argument must not be an Enum");
       }
       BaseMarshallerDelegate<A> marshallerDelegate = in.getSerializationContext().getMarshallerDelegate(clazz);
       return marshallerDelegate.unmarshall(in, null);
+   }
+
+   public static <A> A readFrom(ImmutableSerializationContext ctx, ObjectInput in, Class<A> clazz) throws IOException {
+      return readFrom(TagReaderImpl.newInstance(ctx, in), clazz);
    }
 
    public static <A> A readFrom(ImmutableSerializationContext ctx, InputStream in, Class<A> clazz) throws IOException {
@@ -137,6 +147,10 @@ public final class ProtobufUtil {
       return WrappedMessage.read(ctx, TagReaderImpl.newInstance(ctx, in));
    }
 
+   public static <A> A fromWrappedObjectInput(ImmutableSerializationContext ctx, ObjectInput in) throws IOException {
+      return WrappedMessage.read(ctx, TagReaderImpl.newInstance(ctx, in));
+   }
+
    //todo [anistor] should make it possible to plug in a custom wrapping strategy instead of the default one
    public static byte[] toWrappedByteArray(ImmutableSerializationContext ctx, Object t) throws IOException {
       return toWrappedByteArray(ctx, t, DEFAULT_ARRAY_BUFFER_SIZE);
@@ -144,13 +158,13 @@ public final class ProtobufUtil {
 
    public static byte[] toWrappedByteArray(ImmutableSerializationContext ctx, Object t, int bufferSize) throws IOException {
       ByteArrayOutputStream baos = new ByteArrayOutputStream(bufferSize);
-      WrappedMessage.write(ctx, TagWriterImpl.newInstance(ctx, baos), t);
+      WrappedMessage.write(ctx, TagWriterImpl.newInstanceNoBuffer(ctx, baos), t);
       return baos.toByteArray();
    }
 
    public static ByteBuffer toWrappedByteBuffer(ImmutableSerializationContext ctx, Object t) throws IOException {
       ByteArrayOutputStreamEx baos = new ByteArrayOutputStreamEx(DEFAULT_ARRAY_BUFFER_SIZE);
-      WrappedMessage.write(ctx, TagWriterImpl.newInstance(ctx, baos), t);
+      WrappedMessage.write(ctx, TagWriterImpl.newInstanceNoBuffer(ctx, baos), t);
       return baos.getByteBuffer();
    }
 
@@ -160,6 +174,10 @@ public final class ProtobufUtil {
 
    public static void toWrappedStream(ImmutableSerializationContext ctx, OutputStream out, Object t, int bufferSize) throws IOException {
       WrappedMessage.write(ctx, TagWriterImpl.newInstance(ctx, out, bufferSize), t);
+   }
+
+   public static void toWrappedObjectOutput(ImmutableSerializationContext ctx, ObjectOutput out, Object obj) throws IOException {
+      WrappedMessage.write(ctx, TagWriterImpl.newInstance(ctx, out), obj);
    }
 
    /**

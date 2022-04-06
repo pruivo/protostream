@@ -5,6 +5,14 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.ObjectInput;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutput;
+import java.io.ObjectOutputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -24,7 +32,21 @@ import org.junit.Test;
 public class MarshallingTest extends AbstractProtoStreamTest {
 
    @Test
-   public void testMarshallUser() throws Exception {
+   public void testMarshallUserUsingByteArray() throws Exception {
+      doMarshallUserTest(useByteArray());
+   }
+
+   @Test
+   public void testMarshallUserUsingInputStream() throws Exception {
+      doMarshallUserTest(useInputStream());
+   }
+
+   @Test
+   public void testMarshallUserUsingObjectInput() throws Exception {
+      doMarshallUserTest(useObjectInput());
+   }
+
+   private void doMarshallUserTest(EncoderMethod<User> method) throws Exception {
       ImmutableSerializationContext ctx = createContext();
 
       User user = new User();
@@ -35,9 +57,7 @@ public class MarshallingTest extends AbstractProtoStreamTest {
       user.setAccountIds(new HashSet<>(Arrays.asList(1, 3)));
       user.setAddresses(Collections.singletonList(new Address("Old Street", "XYZ42", -12)));
 
-      byte[] bytes = ProtobufUtil.toByteArray(ctx, user);
-
-      User decoded = ProtobufUtil.fromByteArray(ctx, bytes, User.class);
+      User decoded = method.encodeAndDecode(user, ctx);
 
       assertEquals(1, decoded.getId());
       assertEquals("John", decoded.getName());
@@ -57,6 +77,20 @@ public class MarshallingTest extends AbstractProtoStreamTest {
 
    @Test
    public void testMarshallAccount() throws Exception {
+      doMarshallAccountTest(useByteArray());
+   }
+
+   @Test
+   public void testMarshallAccountUsingInputStream() throws Exception {
+      doMarshallAccountTest(useInputStream());
+   }
+
+   @Test
+   public void testMarshallAccountUsingObjectInput() throws Exception {
+      doMarshallAccountTest(useObjectInput());
+   }
+
+   private void doMarshallAccountTest(EncoderMethod<Account> encoderMethod) throws Exception {
       ImmutableSerializationContext ctx = createContext();
 
       Account account = new Account();
@@ -74,9 +108,7 @@ public class MarshallingTest extends AbstractProtoStreamTest {
       blurb.add(new byte[]{1, 2, 3});
       account.setBlurb(blurb);
 
-      byte[] bytes = ProtobufUtil.toByteArray(ctx, account);
-
-      Account decoded = ProtobufUtil.fromByteArray(ctx, bytes, Account.class);
+      Account decoded = encoderMethod.encodeAndDecode(account, ctx);
 
       assertEquals(1, decoded.getId());
       assertEquals("test account", decoded.getDescription());
@@ -88,5 +120,40 @@ public class MarshallingTest extends AbstractProtoStreamTest {
       assertEquals(3, decoded.getBlurb().get(1).length);
       assertArrayEquals(new byte[]{1, 2, 3}, decoded.getBlurb().get(1));
       assertArrayEquals(new Account.Currency[]{Account.Currency.BRL}, decoded.getCurrencies());
+   }
+
+   @FunctionalInterface
+   private interface EncoderMethod<T> {
+      T encodeAndDecode(T object, ImmutableSerializationContext ctx) throws IOException;
+   }
+
+   private static <T> EncoderMethod<T> useByteArray() {
+      return (object, ctx) -> {
+         ByteArrayOutputStream baos = new ByteArrayOutputStream(512);
+         ProtobufUtil.writeTo(ctx, baos, object);
+         //noinspection unchecked
+         return ProtobufUtil.fromByteArray(ctx, baos.toByteArray(), (Class<T>) object.getClass());
+      };
+   }
+
+   private static <T> EncoderMethod<T> useInputStream() {
+      return (object, ctx) -> {
+         ByteArrayOutputStream baos = new ByteArrayOutputStream(512);
+         ProtobufUtil.writeTo(ctx, baos, object);
+         InputStream is = new ByteArrayInputStream(baos.toByteArray());
+         //noinspection unchecked
+         return ProtobufUtil.readFrom(ctx, is, (Class<T>) object.getClass());
+      };
+   }
+
+   private static <T> EncoderMethod<T> useObjectInput() {
+      return (object, ctx) -> {
+         ByteArrayOutputStream baos = new ByteArrayOutputStream(512);
+         ObjectOutput oo = new ObjectOutputStream(baos);
+         ProtobufUtil.writeTo(ctx, oo, object);
+         ObjectInput oi = new ObjectInputStream(new ByteArrayInputStream(baos.toByteArray()));
+         //noinspection unchecked
+         return ProtobufUtil.readFrom(ctx, oi, (Class<T>) object.getClass());
+      };
    }
 }
