@@ -13,7 +13,10 @@ import org.infinispan.protostream.types.java.CommonTypes;
         dependsOn = CommonTypes.class,
         includeClasses = {
                 ModelWithMap.class,
-                SimpleEnum.class
+                SimpleEnum.class,
+                MapOfString.class,
+                MapOfUUID.class,
+                MapOfMapOfUUID.class
         }
 )
 public interface MapSchema extends GeneratedSchema {
