@@ -14,6 +14,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import org.infinispan.protostream.ImmutableSerializationContext;
+import org.infinispan.protostream.LazyByteArrayOutputStream;
 import org.infinispan.protostream.ProtobufTagMarshaller;
 import org.infinispan.protostream.TagWriter;
 import org.infinispan.protostream.descriptors.WireType;
@@ -133,14 +134,7 @@ public final class TagWriterImpl implements TagWriter, ProtobufTagMarshaller.Wri
 
    @Override
    public void writeString(int number, String value) throws IOException {
-      // TODO [anistor] This is expensive! What can we do to make it more efficient?
-      // Also, when just count bytes for message size we do a useless first conversion, and another one will follow later.
-
-      // Charset.encode is not able to encode directly into our own buffers!
-      byte[] utf8buffer = value.getBytes(StandardCharsets.UTF_8);
-
-      encoder.writeLengthDelimitedField(number, utf8buffer.length);
-      encoder.writeBytes(utf8buffer, 0, utf8buffer.length);
+      encoder.writeUTF8Field(number, value);
    }
 
    @Override
@@ -329,6 +323,12 @@ public final class TagWriterImpl implements TagWriter, ProtobufTagMarshaller.Wri
       void writeLengthDelimitedField(int fieldNumber, int length) throws IOException {
          writeVarint32(WireType.makeTag(fieldNumber, WireType.WIRETYPE_LENGTH_DELIMITED));
          writeVarint32(length);
+      }
+
+      void writeUTF8Field(int fieldNumber, String value) throws IOException {
+         byte[] utf8buffer = value.getBytes(StandardCharsets.UTF_8);
+         writeLengthDelimitedField(fieldNumber, utf8buffer.length);
+         writeBytes(utf8buffer, 0, utf8buffer.length);
       }
 
       // low level ops, writing values without tag
@@ -736,6 +736,31 @@ public final class TagWriterImpl implements TagWriter, ProtobufTagMarshaller.Wri
          }
       }
 
+      int varIntSize(int value) {
+         int i = 1;
+         while (true) {
+            if ((value & 0xFFFFFF80) == 0) {
+               return i;
+            } else {
+               i++;
+               value >>>= 7;
+            }
+         }
+      }
+
+      void writeVarInt32(int value, int index, byte[] buf) {
+         int i = index;
+         while (true) {
+            if ((value & 0xFFFFFF80) == 0) {
+               buf[i] = (byte) value;
+               break;
+            } else {
+               buf[i++] = (byte) (value & 0x7F | 0x80);
+               value >>>= 7;
+            }
+         }
+      }
+
       @Override
       void writeVarint64(long value) throws IOException {
          try {
@@ -792,6 +817,60 @@ public final class TagWriterImpl implements TagWriter, ProtobufTagMarshaller.Wri
             value.get(buffer, value.position(), value.remaining());
             out.write(buffer);
          }
+      }
+
+      @Override
+      void writeUTF8Field(int number, String s) throws IOException {
+         if (!(out instanceof LazyByteArrayOutputStream os)) {
+            super.writeUTF8Field(number, s);
+            return;
+         }
+         writeVarint32(WireType.makeTag(number, WireType.WIRETYPE_LENGTH_DELIMITED));
+
+         // First optimize for 1 - 127 case
+         int strlen = s.length();
+         int varIntLen = varIntSize(strlen);
+         int startPos = os.getPosition();
+         os.ensureCapacity(startPos + varIntLen + strlen);
+         // Note this will be overwritten if not all 1 - 127 characters below
+         writeVarint32(strlen);
+
+         int localPos = os.getPosition();
+         byte[] buf = os.getRawBuffer();
+
+         int c;
+         int i;
+         for (i = 0; i < strlen; i++) {
+            c = s.charAt(i);
+            if (c > 127) break;
+
+            buf[localPos++] = (byte) c;
+         }
+
+         os.setPosition(localPos);
+         // Means we completed with all latin characters
+         if (i == strlen)
+            return;
+
+         // Resize the rest assuming worst case of 3 bytes
+         os.ensureCapacity(startPos + varIntLen + (strlen - i) * 3);
+
+         buf = os.getRawBuffer();
+         for (; i < strlen; i++) {
+            c = s.charAt(i);
+            if ((c >= 0x0001) && (c <= 0x007F)) {
+               buf[localPos++] = (byte) c;
+            } else if (c > 0x07FF) {
+               buf[localPos++] = (byte) (0xE0 | ((c >> 12) & 0x0F));
+               buf[localPos++] = (byte) (0x80 | ((c >> 6) & 0x3F));
+               buf[localPos++] = (byte) (0x80 | (c & 0x3F));
+            } else {
+               buf[localPos++] = (byte) (0xC0 | ((c >> 6) & 0x1F));
+               buf[localPos++] = (byte) (0x80 | (c & 0x3F));
+            }
+         }
+         os.setPosition(localPos);
+         writeVarInt32(localPos - varIntLen - startPos, startPos, os.getRawBuffer());
       }
 
       @Override

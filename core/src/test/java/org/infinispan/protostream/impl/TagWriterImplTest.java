@@ -22,7 +22,7 @@ public class TagWriterImplTest {
 
    private static final Log log = Log.LogFactory.getLog(TagWriterImplTest.class);
    private static final long SEED = System.nanoTime();
-   private static final int MAX_BYTE_ARRAY_SIZE = 512;
+   private static final int MAX_BYTE_ARRAY_SIZE = 2048;
 
    @Test
    public void testByteArrayEncodeAndDecode() throws Exception {
@@ -56,6 +56,23 @@ public class TagWriterImplTest {
       });
    }
 
+   @Test
+   public void testLazyOutputStreamEncodeAndDecode() throws Exception {
+      try (ByteArrayOutputStreamEx out = new ByteArrayOutputStreamEx(MAX_BYTE_ARRAY_SIZE)) {
+         doTest(new Factory() {
+            @Override
+            public TagWriter newWriter(SerializationContext ctx) {
+               return TagWriterImpl.newInstance(ctx, out);
+            }
+
+            @Override
+            public TagReader newReader(SerializationContext ctx) {
+               return TagReaderImpl.newInstance(ctx, new ByteArrayInputStream(out.getByteBuffer().array()));
+            }
+         });
+      }
+   }
+
    private void doTest(Factory factory) throws IOException {
       log.infof("SEED is %s", SEED);
       Random random = new Random(SEED);
@@ -79,6 +96,7 @@ public class TagWriterImplTest {
       writer.writeFloat(++tag, data.f);
       // string
       writer.writeString(++tag, data.s);
+      writer.writeString(++tag, data.utf8ThreeByteStr);
       // byte(s)
       writer.writeBytes(++tag, data.bytes);
       writer.writeBytes(++tag, data.bytes, 1, 2);
@@ -112,6 +130,8 @@ public class TagWriterImplTest {
       // string
       checkFieldNumber(++tag, reader);
       assertEquals(data.s, reader.readString());
+      checkFieldNumber(++tag, reader);
+      assertEquals(data.utf8ThreeByteStr, reader.readString());
       // byte(s)
       checkFieldNumber(++tag, reader);
       assertArrayEquals(data.bytes, reader.readByteArray());
@@ -139,6 +159,7 @@ public class TagWriterImplTest {
       final double d;
       final float f;
       final String s;
+      final String utf8ThreeByteStr;
       final byte[] bytes;
 
       private Data(Random random) {
@@ -149,6 +170,10 @@ public class TagWriterImplTest {
          f = random.nextFloat();
          s = random.ints('a', 'z')
                .limit(10)
+               .collect(StringBuilder::new, StringBuilder::appendCodePoint, StringBuilder::append)
+               .toString();
+         utf8ThreeByteStr = random.ints('a', 'ଟ')
+               .limit(1000)
                .collect(StringBuilder::new, StringBuilder::appendCodePoint, StringBuilder::append)
                .toString();
          bytes = new byte[15];
