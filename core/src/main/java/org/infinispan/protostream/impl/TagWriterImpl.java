@@ -748,7 +748,7 @@ public final class TagWriterImpl implements TagWriter, ProtobufTagMarshaller.Wri
          }
       }
 
-      void writeVarInt32(int value, int index, byte[] buf) {
+      void writeVarInt32Direct(int value, int index, byte[] buf) {
          int i = index;
          while (true) {
             if ((value & 0xFFFFFF80) == 0) {
@@ -825,18 +825,20 @@ public final class TagWriterImpl implements TagWriter, ProtobufTagMarshaller.Wri
             super.writeUTF8Field(number, s);
             return;
          }
-         writeVarint32(WireType.makeTag(number, WireType.WIRETYPE_LENGTH_DELIMITED));
+         int strlen = s.length();
+         int tag = WireType.makeTag(number, WireType.WIRETYPE_LENGTH_DELIMITED);
+         int varIntTagLen = varIntSize(tag);
+         int varIntStrLen = varIntSize(strlen);
+         int startPos = os.getPosition();
 
          // First optimize for 1 - 127 case
-         int strlen = s.length();
-         int varIntLen = varIntSize(strlen);
-         int startPos = os.getPosition();
-         os.ensureCapacity(startPos + varIntLen + strlen);
-         // Note this will be overwritten if not all 1 - 127 characters below
-         writeVarint32(strlen);
-
-         int localPos = os.getPosition();
+         os.ensureCapacity(startPos + varIntTagLen + varIntStrLen + strlen);
          byte[] buf = os.getRawBuffer();
+         writeVarInt32Direct(tag, startPos, buf);
+         // Note this will be overwritten if not all 1 - 127 characters below
+         writeVarInt32Direct(strlen, startPos + varIntTagLen, buf);
+
+         int localPos = startPos + varIntTagLen + varIntStrLen;
 
          int c;
          int i;
@@ -853,7 +855,7 @@ public final class TagWriterImpl implements TagWriter, ProtobufTagMarshaller.Wri
             return;
 
          // Resize the rest assuming worst case of 3 bytes
-         os.ensureCapacity(startPos + varIntLen + (strlen - i) * 3);
+         os.ensureCapacity(startPos + varIntTagLen + varIntStrLen + (strlen - i) * 3);
 
          buf = os.getRawBuffer();
          for (; i < strlen; i++) {
@@ -870,7 +872,8 @@ public final class TagWriterImpl implements TagWriter, ProtobufTagMarshaller.Wri
             }
          }
          os.setPosition(localPos);
-         writeVarInt32(localPos - varIntLen - startPos, startPos, os.getRawBuffer());
+         int numBytes = localPos - varIntTagLen - varIntStrLen - startPos;
+         writeVarInt32Direct(numBytes, startPos + varIntTagLen, os.getRawBuffer());
       }
 
       @Override
