@@ -185,6 +185,8 @@ public class ProtobufUtilTest extends AbstractProtoStreamTest {
       var reader2 = TagReaderImpl.newInstance(ctx, bytes2);
 
       // check if it is readable
+      reader1.readTag();
+      reader2.readTag();
       var str1 = reader1.readString();
       var str2 = reader2.readString();
       if (!Objects.equals(str, str1)) {
@@ -193,7 +195,7 @@ public class ProtobufUtilTest extends AbstractProtoStreamTest {
       }
 
       if (!Objects.equals(str, str2)) {
-         System.err.println("Unable to read string from bytes1: " + str + " != " + str2);
+         System.err.println("Unable to read string from bytes2: " + str + " != " + str2);
          fail = true;
       }
       assertFalse(fail);
