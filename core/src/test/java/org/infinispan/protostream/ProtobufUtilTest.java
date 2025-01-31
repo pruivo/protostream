@@ -4,6 +4,7 @@ import static org.infinispan.protostream.domain.Account.Currency.BRL;
 import static org.infinispan.protostream.domain.Account.Currency.USD;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -21,13 +22,19 @@ import java.util.Arrays;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import org.infinispan.protostream.domain.Account;
 import org.infinispan.protostream.domain.Address;
 import org.infinispan.protostream.domain.Item;
 import org.infinispan.protostream.domain.Numerics;
 import org.infinispan.protostream.domain.User;
+import org.infinispan.protostream.impl.ByteArrayOutputStreamEx;
+import org.infinispan.protostream.impl.TagReaderImpl;
+import org.infinispan.protostream.impl.TagWriterImpl;
 import org.infinispan.protostream.test.AbstractProtoStreamTest;
 import org.junit.Test;
 
@@ -146,6 +153,50 @@ public class ProtobufUtilTest extends AbstractProtoStreamTest {
          User user1 = ProtobufUtil.fromWrappedStream(ctx, in);
          assertEquals(user, user1);
       }
+   }
+
+   @Test
+   public void testStrings() throws IOException {
+      ImmutableSerializationContext ctx = createContext();
+      var os1 = new ByteArrayOutputStream();
+      var os2 = new ByteArrayOutputStreamEx();
+      var writer1 = TagWriterImpl.newInstance(ctx, os1);
+      var writer2 = TagWriterImpl.newInstance(ctx, os2);
+
+      var str = IntStream.range(0, 120)
+              .mapToObj(ignored -> Character.toString(0x1F600)) // emoji
+              .collect(Collectors.joining(""));
+
+      writer1.writeString(1, str);
+      writer2.writeString(1, str);
+
+      var bytes1 = os1.toByteArray();
+      var bytes2 = os2.toByteArray();
+
+      boolean fail = false;
+
+      // Infinispan uses arrays equals if strings are used as keys
+      if (!Arrays.equals(bytes1, bytes2)) {
+         System.err.println("byte array does not match: " + bytes1.length + " != " + bytes2.length);
+         fail = true;
+      }
+
+      var reader1 = TagReaderImpl.newInstance(ctx, bytes1);
+      var reader2 = TagReaderImpl.newInstance(ctx, bytes2);
+
+      // check if it is readable
+      var str1 = reader1.readString();
+      var str2 = reader2.readString();
+      if (!Objects.equals(str, str1)) {
+         System.err.println("Unable to read string from bytes1: " + str + " != " + str1);
+         fail = true;
+      }
+
+      if (!Objects.equals(str, str2)) {
+         System.err.println("Unable to read string from bytes1: " + str + " != " + str2);
+         fail = true;
+      }
+      assertFalse(fail);
    }
 
    @Test
